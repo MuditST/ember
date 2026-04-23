@@ -1,13 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { useChat } from "@ai-sdk/react";
 import {
   DefaultChatTransport,
   isToolUIPart,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from "ai";
-import { Flame, CheckIcon, XIcon } from "lucide-react";
+import { CheckIcon, XIcon, Moon, Info } from "lucide-react";
 import type { FireAgentUIMessage } from "@/lib/agents/fire-agent";
 
 import {
@@ -46,6 +47,8 @@ import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import { FireMap, type MapStyleKey } from "@/components/map/fire-map";
 import { StyleSwitcher } from "@/components/map/style-switcher";
 import { DrawToolbar } from "@/components/map/draw-toolbar";
+import { GridInfoBar } from "@/components/map/grid-info-bar";
+import { GridOverlay, MapCrosshair } from "@/components/map/grid-overlay";
 import { DrawProvider, useDraw } from "@/lib/draw/draw-context";
 
 // ---------------------------------------------------------------------------
@@ -99,7 +102,7 @@ export default function EmberPage() {
 function EmberPageInner() {
   const [input, setInput] = useState("");
   const [mapStyle, setMapStyle] = useState<MapStyleKey | null>(null);
-  const { getSpatialContext } = useDraw();
+  const { getSpatialContext, setGridConfig, recenterToGrid } = useDraw();
 
   // Ref keeps the transport body callback fresh across re-renders.
   // Without this, the transport closure would freeze on the initial
@@ -121,6 +124,42 @@ function EmberPageInner() {
       transport,
       sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
     });
+
+  // ── Agent → UI grid sync ──
+  // When the agent calls configure_simulation, auto-place the grid on the map.
+  // AI SDK v6: typed parts use part.type === "tool-<name>", part.state, part.output
+  const lastSyncedRef = useRef<string>("");
+  useEffect(() => {
+    for (const msg of messages) {
+      if (msg.role !== "assistant" || !msg.parts) continue;
+      for (const part of msg.parts) {
+        if (part.type !== "tool-configure_simulation") continue;
+        if (part.state !== "output-available") continue;
+
+        const output = part.output as {
+          location?: { lat: number; lng: number };
+          grid?: { resolution: number; dimension: number };
+        } | undefined;
+
+        if (!output?.location) continue;
+
+        // Deduplicate — don't re-apply the same config
+        const key = JSON.stringify(output);
+        if (key === lastSyncedRef.current) continue;
+        lastSyncedRef.current = key;
+
+        setGridConfig({
+          lat: output.location.lat,
+          lng: output.location.lng,
+          cellResolution: output.grid?.resolution ?? 30,
+          cellDimension: output.grid?.dimension ?? 200,
+        });
+
+        // Recenter to the new grid after a brief delay (let state settle)
+        setTimeout(() => recenterToGrid(), 100);
+      }
+    }
+  }, [messages, setGridConfig, recenterToGrid]);
 
   const handleSubmit = (message: PromptInputMessage) => {
     if (!message.text.trim()) return;
@@ -144,10 +183,30 @@ function EmberPageInner() {
         <div className="flex w-[40vw] xl:w-[30vw] shrink-0 flex-col">
           {/* ── Solid header ── */}
           <header className="relative z-10 flex shrink-0 items-center gap-2 bg-background px-5 py-3">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10">
-              <Flame className="size-4 text-primary" />
-            </div>
+            <Image
+              src="/ember-logo.png"
+              alt="Ember"
+              width={24}
+              height={24}
+              className="size-6"
+            />
             <span className="text-sm font-semibold tracking-wider">EMBER</span>
+
+            {/* Right-side actions */}
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Info"
+              >
+                <Info className="size-4" />
+              </button>
+              <button
+                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Toggle theme"
+              >
+                <Moon className="size-4" />
+              </button>
+            </div>
           </header>
 
           {/* Thin blur below header (fades into conversation) */}
@@ -347,10 +406,19 @@ function EmberPageInner() {
         {/* ═══════════════════════════════════════════════════════════════ */}
         {/*  MAP PANEL (right)                                            */}
         {/* ═══════════════════════════════════════════════════════════════ */}
-        <div className="relative flex-1 min-h-0">
+        <div className="relative flex-1 min-h-0 overflow-hidden">
           <FireMap styleOverride={mapStyle} />
 
-          {/* Draw toolbar overlay */}
+          {/* Grid overlay: diagonal stripes outside grid area */}
+          <GridOverlay />
+
+          {/* Crosshair at map center (before grid is placed) */}
+          <MapCrosshair />
+
+          {/* Grid info bar — top center */}
+          <GridInfoBar className="absolute top-4 left-1/2 -translate-x-1/2 z-20" />
+
+          {/* Draw toolbar — bottom center (only visible after grid placed) */}
           <DrawToolbar className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20" />
 
           {/* Style switcher overlay */}

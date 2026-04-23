@@ -33,14 +33,15 @@ interface DrawToolbarProps {
 }
 
 export function DrawToolbar({ className }: DrawToolbarProps) {
-  const { ready, activeMode, setMode, features, clearAll } = useDraw();
+  const { ready, activeMode, setMode, features, clearDrawings, gridConfig } = useDraw();
 
   const hasFeatures =
     features.ignitions.length > 0 ||
     features.burnPaths.length > 0 ||
     features.fuelBreaks.length > 0;
 
-  if (!ready) return null;
+  // Only show toolbar after grid is placed (progressive unlock)
+  if (!ready || !gridConfig) return null;
 
   const isPanMode = activeMode === null;
 
@@ -151,12 +152,12 @@ export function DrawToolbar({ className }: DrawToolbarProps) {
         <>
           <div className="mx-0.5 h-6 w-px bg-border" />
           <button
-            onClick={clearAll}
+            onClick={clearDrawings}
             className={cn(
               "flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[13px] font-medium",
               "text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
             )}
-            title="Reset all (R)"
+            title="Reset (R)"
           >
             <Trash2 className="size-4" />
             <kbd className="rounded px-1 py-0.5 text-[10px] font-mono leading-none text-muted-foreground bg-muted">

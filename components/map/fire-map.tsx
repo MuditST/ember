@@ -60,9 +60,9 @@ export function FireMap({ styleOverride }: FireMapProps) {
     <Map
       ref={mapRef}
       initialViewState={{
-        longitude: -98.5,
-        latitude: 39.8,
-        zoom: 4,
+        longitude: -118.25,
+        latitude: 34.15,
+        zoom: 10,
       }}
       mapStyle={STYLES[activeStyle]}
       style={{ width: "100%", height: "100%" }}

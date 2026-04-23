@@ -43,6 +43,36 @@ export interface DrawnFeatures {
   fuelBreaks: DrawnLine[];
 }
 
+/** Grid configuration for the simulation area. */
+export interface GridConfig {
+  /** Center latitude */
+  lat: number;
+  /** Center longitude */
+  lng: number;
+  /** Cell size in meters (2–30) */
+  cellResolution: number;
+  /** Cells per side (50–200) */
+  cellDimension: number;
+}
+
+/** Compute the grid side length in meters. */
+export function getGridSideMeters(config: GridConfig): number {
+  return config.cellDimension * config.cellResolution;
+}
+
+/** Compute the bounding box [sw, ne] for a grid config. */
+export function getGridBounds(
+  config: GridConfig
+): [[number, number], [number, number]] {
+  const halfM = getGridSideMeters(config) / 2;
+  const dLat = halfM / 111320;
+  const dLng = halfM / (111320 * Math.cos((config.lat * Math.PI) / 180));
+  return [
+    [config.lng - dLng, config.lat - dLat], // SW
+    [config.lng + dLng, config.lat + dLat], // NE
+  ];
+}
+
 export interface DrawContextValue {
   /** Whether Terra Draw is attached and ready */
   ready: boolean;
@@ -54,12 +84,22 @@ export interface DrawContextValue {
   features: DrawnFeatures;
   /** Remove a drawn feature by id */
   removeFeature: (id: string) => void;
-  /** Clear all drawn features */
-  clearAll: () => void;
+  /** Clear drawn features only (points, lines, breaks) */
+  clearDrawings: () => void;
   /** Attach to a MapLibre map instance. Call once on map load. */
   attachMap: (map: MapLibreMap) => void;
   /** Build a plain-text spatial context summary for the agent */
   getSpatialContext: () => string;
+  /** Current grid configuration (null = no grid placed) */
+  gridConfig: GridConfig | null;
+  /** Place or update the grid */
+  setGridConfig: (config: GridConfig | null) => void;
+  /** Clear grid + all drawings (full reset to stage 1) */
+  clearGrid: () => void;
+  /** Fly the map to fit the current grid bounds */
+  recenterToGrid: () => void;
+  /** Access to the map instance (for center tracking, etc.) */
+  getMap: () => MapLibreMap | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +145,7 @@ export function DrawProvider({ children }: { children: ReactNode }) {
     burnPaths: [],
     fuelBreaks: [],
   });
+  const [gridConfig, setGridConfigState] = useState<GridConfig | null>(null);
 
   // ── Sync features from Terra Draw store → React state ──
   const syncFeatures = useCallback(() => {
@@ -301,8 +342,8 @@ export function DrawProvider({ children }: { children: ReactNode }) {
     [syncFeatures]
   );
 
-  // ── Clear all ──
-  const clearAll = useCallback(() => {
+  // ── Clear drawings only (points, lines, breaks — NOT grid) ──
+  const clearDrawings = useCallback(() => {
     const draw = drawRef.current;
     if (!draw) return;
     draw.clear();
@@ -311,15 +352,49 @@ export function DrawProvider({ children }: { children: ReactNode }) {
     draw.setMode(TD_MODE.static);
   }, [syncFeatures]);
 
+  // ── Grid management ──
+  const setGridConfig = useCallback((config: GridConfig | null) => {
+    setGridConfigState(config);
+  }, []);
+
+  const clearGrid = useCallback(() => {
+    // Full reset: remove grid + all drawings
+    const draw = drawRef.current;
+    if (draw) {
+      draw.clear();
+      syncFeatures();
+      setActiveMode(null);
+      draw.setMode(TD_MODE.static);
+    }
+    setGridConfigState(null);
+  }, [syncFeatures]);
+
+  const recenterToGrid = useCallback(() => {
+    const map = mapRef.current;
+    const config = gridConfig;
+    if (!map || !config) return;
+    const bounds = getGridBounds(config);
+    map.fitBounds(bounds, { padding: 60, duration: 1000 });
+  }, [gridConfig]);
+
+  const getMap = useCallback(() => mapRef.current, []);
+
   // ── Build spatial context string for agent injection ──
   const getSpatialContext = useCallback((): string => {
-    const { ignitions, burnPaths, fuelBreaks } = features;
+    const parts: string[] = [];
 
-    if (!ignitions.length && !burnPaths.length && !fuelBreaks.length) {
-      return "No features drawn on the map.";
+    // Grid info
+    if (gridConfig) {
+      const sideKm = (getGridSideMeters(gridConfig) / 1000).toFixed(1);
+      parts.push(
+        `Grid: ${gridConfig.cellDimension}×${gridConfig.cellDimension} cells, ` +
+        `${gridConfig.cellResolution}m resolution, ${sideKm}km × ${sideKm}km area, ` +
+        `centered at (${gridConfig.lat.toFixed(4)}°N, ${gridConfig.lng.toFixed(4)}°W)`
+      );
     }
 
-    const parts: string[] = [];
+    // Drawn features
+    const { ignitions, burnPaths, fuelBreaks } = features;
 
     if (ignitions.length) {
       const pts = ignitions
@@ -346,8 +421,12 @@ export function DrawProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    return `Map features:\n${parts.join("\n")}`;
-  }, [features]);
+    if (parts.length === 0) {
+      return "No grid placed and no features drawn on the map.";
+    }
+
+    return `Map state:\n${parts.join("\n")}`;
+  }, [features, gridConfig]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -370,9 +449,9 @@ export function DrawProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // R = Reset / clear all drawings
+      // R = Reset / clear drawings only (not grid)
       if (key === "r") {
-        clearAll();
+        clearDrawings();
         return;
       }
 
@@ -411,7 +490,7 @@ export function DrawProvider({ children }: { children: ReactNode }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeMode, setMode, clearAll, syncFeatures]);
+  }, [activeMode, setMode, clearDrawings, syncFeatures]);
 
   // ── Right-click to finish line and continue drawing ──
   // When the user right-clicks mid-drawing, cycle the mode:
@@ -458,9 +537,14 @@ export function DrawProvider({ children }: { children: ReactNode }) {
         setMode,
         features,
         removeFeature,
-        clearAll,
+        clearDrawings,
         attachMap,
         getSpatialContext,
+        gridConfig,
+        setGridConfig,
+        clearGrid,
+        recenterToGrid,
+        getMap,
       }}
     >
       {children}
