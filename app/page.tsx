@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import {
   DefaultChatTransport,
@@ -45,12 +45,16 @@ import {
 import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import { FireMap, type MapStyleKey } from "@/components/map/fire-map";
 import { StyleSwitcher } from "@/components/map/style-switcher";
+import { DrawToolbar } from "@/components/map/draw-toolbar";
+import { DrawProvider, useDraw } from "@/lib/draw/draw-context";
 
 // ---------------------------------------------------------------------------
-// Transport — single instance, reused across renders
+// Transport — uses a getter body so spatial context is fresh on every request
 // ---------------------------------------------------------------------------
 
-const transport = new DefaultChatTransport({ api: "/api/chat" });
+// We can't create the transport here with the getter because the draw context
+// doesn't exist yet. The transport is created inside the component.
+// See EmberPageInner below.
 
 // ---------------------------------------------------------------------------
 // Starter suggestions
@@ -85,8 +89,32 @@ const TOOL_LABELS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export default function EmberPage() {
+  return (
+    <DrawProvider>
+      <EmberPageInner />
+    </DrawProvider>
+  );
+}
+
+function EmberPageInner() {
   const [input, setInput] = useState("");
   const [mapStyle, setMapStyle] = useState<MapStyleKey | null>(null);
+  const { getSpatialContext } = useDraw();
+
+  // Ref keeps the transport body callback fresh across re-renders.
+  // Without this, the transport closure would freeze on the initial
+  // getSpatialContext and always send "No features drawn on the map."
+  const spatialContextRef = useRef(getSpatialContext);
+  spatialContextRef.current = getSpatialContext;
+
+  // Transport with spatial context body — created once, ref keeps it fresh
+  const [transport] = useState(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        body: () => ({ spatialContext: spatialContextRef.current() }),
+      })
+  );
 
   const { messages, sendMessage, status, addToolApprovalResponse } =
     useChat<FireAgentUIMessage>({
@@ -119,7 +147,7 @@ export default function EmberPage() {
             <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10">
               <Flame className="size-4 text-primary" />
             </div>
-            <span className="text-sm font-semibold tracking-tight">Ember</span>
+            <span className="text-sm font-semibold tracking-wider">EMBER</span>
           </header>
 
           {/* Thin blur below header (fades into conversation) */}
@@ -321,6 +349,9 @@ export default function EmberPage() {
         {/* ═══════════════════════════════════════════════════════════════ */}
         <div className="relative flex-1 min-h-0">
           <FireMap styleOverride={mapStyle} />
+
+          {/* Draw toolbar overlay */}
+          <DrawToolbar className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20" />
 
           {/* Style switcher overlay */}
           <StyleSwitcher

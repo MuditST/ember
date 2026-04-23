@@ -24,35 +24,33 @@ export function StyleSwitcher({
   return (
     <div
       className={cn(
-        "flex items-center gap-1 rounded-lg border bg-background/80 p-1 shadow-lg backdrop-blur-sm",
+        "flex items-center gap-1 rounded-xl border bg-background/80 px-1.5 py-1.5 shadow-lg backdrop-blur-sm",
         className
       )}
     >
       <button
         onClick={() => onStyleChange(null)}
         className={cn(
-          "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+          "flex items-center rounded-lg px-2.5 py-2 transition-colors",
           !isSatellite
             ? "bg-primary text-primary-foreground"
             : "text-muted-foreground hover:text-foreground"
         )}
         title="Map view (theme-aware)"
       >
-        <Map className="size-3.5" />
-        <span>Map</span>
+        <Map className="size-4" />
       </button>
       <button
         onClick={() => onStyleChange("satellite")}
         className={cn(
-          "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+          "flex items-center rounded-lg px-2.5 py-2 transition-colors",
           isSatellite
             ? "bg-primary text-primary-foreground"
             : "text-muted-foreground hover:text-foreground"
         )}
         title="Satellite view"
       >
-        <Satellite className="size-3.5" />
-        <span>Satellite</span>
+        <Satellite className="size-4" />
       </button>
     </div>
   );

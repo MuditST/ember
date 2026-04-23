@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import Map, { NavigationControl } from "react-map-gl/maplibre";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Map, { NavigationControl, type MapRef } from "react-map-gl/maplibre";
 import { useTheme } from "next-themes";
+import { useDraw } from "@/lib/draw/draw-context";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,8 @@ interface FireMapProps {
 export function FireMap({ styleOverride }: FireMapProps) {
   const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const mapRef = useRef<MapRef>(null);
+  const { attachMap } = useDraw();
 
   // Avoid hydration mismatch — only render after mount
   useEffect(() => setMounted(true), []);
@@ -40,6 +43,14 @@ export function FireMap({ styleOverride }: FireMapProps) {
     resolvedTheme === "light" ? "dataviz-light" : "dataviz-dark";
   const activeStyle = styleOverride ?? autoStyle;
 
+  // Attach Terra Draw once the map loads
+  const handleLoad = useCallback(() => {
+    const mapInstance = mapRef.current?.getMap();
+    if (mapInstance) {
+      attachMap(mapInstance);
+    }
+  }, [attachMap]);
+
   // Show nothing during SSR / initial hydration
   if (!mounted) {
     return <div className="size-full bg-background" />;
@@ -47,6 +58,7 @@ export function FireMap({ styleOverride }: FireMapProps) {
 
   return (
     <Map
+      ref={mapRef}
       initialViewState={{
         longitude: -98.5,
         latitude: 39.8,
@@ -55,6 +67,8 @@ export function FireMap({ styleOverride }: FireMapProps) {
       mapStyle={STYLES[activeStyle]}
       style={{ width: "100%", height: "100%" }}
       attributionControl={false}
+      onLoad={handleLoad}
+      onContextMenu={(e) => e.originalEvent.preventDefault()}
     >
       <NavigationControl position="bottom-right" showCompass visualizePitch />
     </Map>

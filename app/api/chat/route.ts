@@ -10,7 +10,10 @@ export const maxDuration = 60;
 const SESSION_COOKIE = "ember_session";
 
 export async function POST(request: Request) {
-  const { messages } = (await request.json()) as { messages: UIMessage[] };
+  const { messages, spatialContext } = (await request.json()) as {
+    messages: UIMessage[];
+    spatialContext?: string;
+  };
 
   // Read existing session token from HTTP-only cookie (cross-turn continuity).
   // The token never appears in client message history — it's server-side only.
@@ -22,8 +25,10 @@ export async function POST(request: Request) {
   // create_simulation will populate it within the first agent step.
   const tokenRef: SessionTokenRef = { current: existingToken };
 
-  // Build a request-scoped agent with token-bound tools
-  const agent = createFireAgent(tokenRef);
+  // Build a request-scoped agent with token-bound tools.
+  // Spatial context (drawn features) is injected into the system prompt
+  // so the agent always knows the current map state.
+  const agent = createFireAgent(tokenRef, spatialContext);
 
   const response = await createAgentUIStreamResponse({
     agent,

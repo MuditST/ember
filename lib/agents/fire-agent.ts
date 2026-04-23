@@ -73,7 +73,7 @@ const ALL_TOOLS = ["create_simulation", ...SESSION_TOOLS] as const;
  * This handles both same-turn flows (create → configure → ignite → run)
  * and cross-turn flows (token from a previous conversation turn).
  */
-export function createFireAgent(tokenRef: SessionTokenRef) {
+export function createFireAgent(tokenRef: SessionTokenRef, spatialContext?: string) {
   const getToken = () => {
     if (!tokenRef.current) {
       throw new Error("No active simulation session. Call create_simulation first.");
@@ -81,9 +81,15 @@ export function createFireAgent(tokenRef: SessionTokenRef) {
     return tokenRef.current;
   };
 
+  // Build system prompt with spatial context injected dynamically.
+  // This gives the agent awareness of drawn features on every turn.
+  const instructions = spatialContext
+    ? `${SYSTEM_PROMPT}\n\n## Current Map State\n${spatialContext}`
+    : SYSTEM_PROMPT;
+
   return new ToolLoopAgent({
     model: vertex("gemini-3-flash-preview"),
-    instructions: SYSTEM_PROMPT,
+    instructions,
     tools: {
       create_simulation: tools.makeCreateSimulation(tokenRef),
       configure_simulation: tools.makeConfigureSimulation(getToken),
