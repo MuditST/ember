@@ -164,4 +164,6 @@ lib/
 
 ## License
 
-Research project — Georgia State University ACME Lab.
+MIT — see [LICENSE](./LICENSE).
+
+> **Note:** The [DEVS-FIRE simulation API](https://firesim.cs.gsu.edu/api/) is a research service provided by Georgia State University's ACME Lab. Ember is an independent open-source frontend; the API and its underlying models are the property of GSU.

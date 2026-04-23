@@ -275,9 +275,6 @@ export default function ChatPage() {
             className="absolute bottom-1 right-1"
           />
         </PromptInput>
-        <p className="mx-auto mt-2 max-w-2xl text-center text-xs text-muted-foreground">
-          Ember uses the DEVS-FIRE research API. Simulations are limited to continental US.
-        </p>
       </div>
     </div>
   );
