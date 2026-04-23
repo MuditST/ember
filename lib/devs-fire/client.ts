@@ -13,7 +13,10 @@ import type {
 // Constants
 // ---------------------------------------------------------------------------
 
-const BASE_URL = "https://firesim.cs.gsu.edu/api";
+export const DEFAULT_DEVS_FIRE_BASE_URL = "http://firesim.cs.gsu.edu:8084/api";
+export const DEVS_FIRE_BASE_URL =
+  process.env.DEVS_FIRE_BASE_URL ?? DEFAULT_DEVS_FIRE_BASE_URL;
+const REQUEST_TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
 // Error handling
@@ -50,8 +53,23 @@ function buildParams(params: Record<string, string | number | undefined>): strin
  * Throws `DevsFireError` on non-2xx responses.
  */
 async function post<T>(endpoint: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
-  const url = `${BASE_URL}/${endpoint}/${buildParams(params)}`;
-  const res = await fetch(url, { method: "POST" });
+  const url = `${DEVS_FIRE_BASE_URL}/${endpoint}/${buildParams(params)}`;
+  let res: Response;
+
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Network request failed";
+    throw new DevsFireError(
+      endpoint,
+      0,
+      `Unable to reach DEVS-FIRE at ${DEVS_FIRE_BASE_URL} (${message})`,
+    );
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "No response body");

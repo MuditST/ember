@@ -1,6 +1,7 @@
 import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import { createFireAgent } from "@/lib/agents/fire-agent";
+import { DEVS_FIRE_BASE_URL } from "@/lib/devs-fire/client";
 import type { SessionTokenRef } from "@/lib/tools";
 
 // Allow agent loops up to 120 seconds (simulation API can be slow for long runs)
@@ -16,8 +17,11 @@ const SESSION_COOKIE = "ember_session";
 async function isTokenValid(token: string): Promise<boolean> {
   try {
     const res = await fetch(
-      `https://firesim.cs.gsu.edu/api/getCellSpaceSize/?userToken=${token}`,
-      { method: "POST" }
+      `${DEVS_FIRE_BASE_URL}/getCellSpaceSize/?userToken=${token}`,
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(8000),
+      }
     );
     return res.ok;
   } catch {

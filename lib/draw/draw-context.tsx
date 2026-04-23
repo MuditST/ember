@@ -344,47 +344,48 @@ export function DrawProvider({ children }: { children: ReactNode }) {
       const draw = drawRef.current;
       if (!draw) return;
 
-      // Snapshot all features BEFORE the mode switch.
-      // draw.setMode() calls cleanUp() on the current mode, which removes
-      // any in-progress (un-finished) geometry. We'll re-add valid features.
-      const before = draw.getSnapshot();
+      // All Terra Draw operations are wrapped in try/catch because the
+      // internal store can become detached after map style changes,
+      // simulation lifecycle, or HMR.
+      try {
+        const before = draw.getSnapshot();
 
-      if (mode === null) {
-        draw.setMode(TD_MODE.static);
-        setActiveMode(null);
-      } else {
-        draw.setMode(TD_MODE[mode]);
-        setActiveMode(mode);
+        if (mode === null) {
+          draw.setMode(TD_MODE.static);
+        } else {
+          draw.setMode(TD_MODE[mode]);
+        }
+
+        // Detect features that were lost during the mode switch
+        const after = draw.getSnapshot();
+        const survivingIds = new Set(after.map((f) => String(f.id)));
+        const lost = before.filter((f) => !survivingIds.has(String(f.id)));
+
+        // Re-add lost features that have valid geometry.
+        const recoverable = lost
+          .map((f) => {
+            if (f.geometry.type === "LineString") {
+              const coords = [...(f.geometry.coordinates as [number, number][])];
+              coords.pop(); // remove cursor-tracking coordinate
+              if (coords.length < 2) return null;
+              return {
+                ...f,
+                geometry: { ...f.geometry, coordinates: coords },
+              };
+            }
+            if (f.geometry.type === "Point") return f;
+            return null;
+          })
+          .filter(Boolean) as GeoJSONStoreFeatures[];
+
+        if (recoverable.length > 0) {
+          draw.addFeatures(recoverable);
+        }
+      } catch {
+        // Terra Draw store is detached — skip feature recovery
       }
 
-      // Detect features that were lost during the mode switch
-      const after = draw.getSnapshot();
-      const survivingIds = new Set(after.map((f) => String(f.id)));
-      const lost = before.filter((f) => !survivingIds.has(String(f.id)));
-
-      // Re-add lost features that have valid geometry.
-      // IMPORTANT: In-progress lines have a trailing "tracking" coordinate
-      // that follows the cursor — strip it so it doesn't become a ghost point.
-      const recoverable = lost
-        .map((f) => {
-          if (f.geometry.type === "LineString") {
-            const coords = [...(f.geometry.coordinates as [number, number][])];;
-            coords.pop(); // remove cursor-tracking coordinate
-            if (coords.length < 2) return null;
-            return {
-              ...f,
-              geometry: { ...f.geometry, coordinates: coords },
-            };
-          }
-          if (f.geometry.type === "Point") return f;
-          return null;
-        })
-        .filter(Boolean) as GeoJSONStoreFeatures[];
-
-      if (recoverable.length > 0) {
-        draw.addFeatures(recoverable);
-      }
-
+      setActiveMode(mode);
       syncFeatures();
     },
     [syncFeatures]
@@ -409,25 +410,57 @@ export function DrawProvider({ children }: { children: ReactNode }) {
   const clearDrawings = useCallback(() => {
     const draw = drawRef.current;
     if (!draw) return;
-    draw.clear();
+    try {
+      draw.clear();
+    } catch {
+      // Terra Draw store may be detached after map style change or HMR
+    }
     syncFeatures();
     setActiveMode(null);
-    draw.setMode(TD_MODE.static);
+    try {
+      draw.setMode(TD_MODE.static);
+    } catch {
+      // Same — adapter may be stale
+    }
   }, [syncFeatures]);
 
   // ── Grid management ──
+  // Stabilize: only update state when the config values actually change.
+  // This prevents infinite re-render loops when the message-sync effect
+  // calls setGridConfig with a structurally-identical object each render.
   const setGridConfig = useCallback((config: GridConfig | null) => {
-    setGridConfigState(config);
+    setGridConfigState((prev) => {
+      if (prev === config) return prev;
+      if (
+        prev &&
+        config &&
+        prev.lat === config.lat &&
+        prev.lng === config.lng &&
+        prev.cellResolution === config.cellResolution &&
+        prev.cellDimension === config.cellDimension
+      ) {
+        return prev;
+      }
+      return config;
+    });
   }, []);
 
   const clearGrid = useCallback(() => {
     // Full reset: remove grid + all drawings
     const draw = drawRef.current;
     if (draw) {
-      draw.clear();
+      try {
+        draw.clear();
+      } catch {
+        // Terra Draw store may be detached after map style change or HMR
+      }
       syncFeatures();
       setActiveMode(null);
-      draw.setMode(TD_MODE.static);
+      try {
+        draw.setMode(TD_MODE.static);
+      } catch {
+        // Same — adapter may be stale
+      }
     }
     setGridConfigState(null);
   }, [syncFeatures]);

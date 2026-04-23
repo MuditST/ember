@@ -28,8 +28,12 @@ export function makeConfigureSimulation(getToken: () => string) {
         .number()
         .optional()
         .describe("Grid dimension — cells per side (default 200)"),
+      simDuration: z
+        .number()
+        .optional()
+        .describe("Simulation duration in seconds (default 3600 = 1 hour)"),
     }),
-    execute: async ({ lat, lng, windSpeed, windDirection, cellResolution, cellDimension }) => {
+    execute: async ({ lat, lng, windSpeed, windDirection, cellResolution, cellDimension, simDuration }) => {
       const token = getToken();
       await api.configureSimulation(token, {
         lat,
@@ -50,6 +54,7 @@ export function makeConfigureSimulation(getToken: () => string) {
           resolution: cellResolution ?? 30,
           dimension: cellDimension ?? 200,
         },
+        simDuration: simDuration ?? null,
       };
     },
   });

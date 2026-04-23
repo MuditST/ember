@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart } from "ai";
-import { Info, Moon, RotateCcw } from "lucide-react";
+import { Info, Moon, RotateCcw, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
 import type { FireAgentUIMessage } from "@/lib/agents/fire-agent";
 import {
   Conversation,
@@ -43,14 +45,10 @@ import { DrawProvider, useDraw } from "@/lib/draw/draw-context";
 import type { CellOperation } from "@/lib/devs-fire/types";
 
 const SUGGESTIONS = [
-  // AI makes grid + ignition, runs it all
   "Wildfire in Angeles National Forest during Santa Ana winds",
-  // AI sets up grid, user places ignition
-  "Set up a fire scenario near Yellowstone — I'll place the ignition myself",
-  // All-in-one: location, wind, ignition, duration, run
-  "34.3N 118.1W, 15 m/s NE wind, ignition at center, 2 hours — run it",
-  // User already drew features, just run
-  "I've set everything up on the map — run the simulation",
+  "Set up a fire scenario near Yellowstone",
+  "Simulate a grass fire near Wichita, Kansas with strong south winds",
+  "Fire at 34.3N 118.1W, ignition at all 4 corners, 2 hours",
 ];
 
 const TOOL_LABELS: Record<string, string> = {
@@ -63,6 +61,57 @@ const TOOL_LABELS: Record<string, string> = {
   "tool-get_terrain_data": "Analyzing Terrain",
 };
 
+function getToolPartFingerprint(part: FireAgentUIMessage["parts"][number]) {
+  if (!isToolUIPart(part)) return part.type;
+
+  const base = `${part.type}:${part.toolCallId}:${part.state}`;
+
+  if (part.type === "tool-configure_simulation" && part.state === "output-available") {
+    const output = part.output as
+      | {
+          location?: { lat: number; lng: number };
+          grid?: { resolution?: number; dimension?: number };
+          simDuration?: number | null;
+        }
+      | undefined;
+    return [
+      base,
+      output?.location?.lat ?? "",
+      output?.location?.lng ?? "",
+      output?.grid?.resolution ?? "",
+      output?.grid?.dimension ?? "",
+      output?.simDuration ?? "",
+    ].join(":");
+  }
+
+  if (part.type === "tool-run_simulation") {
+    const input = part.input as { time?: number } | undefined;
+    if (part.state === "input-streaming" || part.state === "input-available") {
+      return `${base}:${input?.time ?? ""}`;
+    }
+
+    if (part.state === "output-available") {
+      const output = part.output as
+        | {
+            status?: string;
+            cellOperations?: number;
+            spreadCells?: number;
+            timeSimulated?: number;
+          }
+        | undefined;
+      return [
+        base,
+        output?.status ?? "",
+        output?.cellOperations ?? "",
+        output?.spreadCells ?? "",
+        output?.timeSimulated ?? "",
+      ].join(":");
+    }
+  }
+
+  return base;
+}
+
 export default function EmberPage() {
   return (
     <DrawProvider>
@@ -74,6 +123,10 @@ export default function EmberPage() {
 function EmberPageInner() {
   const [input, setInput] = useState("");
   const [mapStyle, setMapStyle] = useState<MapStyleKey | null>(null);
+  const { resolvedTheme, setTheme } = useTheme();
+  // Avoid hydration mismatch — resolvedTheme is undefined on server
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const {
     getSpatialContext,
     gridConfig,
@@ -88,6 +141,7 @@ function EmberPageInner() {
     clearGrid,
     dismissSimulation,
     clearAgentFeatures,
+    clearDrawings,
   } = useDraw();
 
   const spatialContextRef = useRef(getSpatialContext);
@@ -101,7 +155,7 @@ function EmberPageInner() {
       }),
   );
 
-  const { messages, sendMessage, setMessages, status } = useChat<FireAgentUIMessage>({
+  const { messages, sendMessage, setMessages, status, stop } = useChat<FireAgentUIMessage>({
     transport,
     onFinish: ({ finishReason, isAbort, isDisconnect, isError, message }) => {
       console.log("[ember][client] chat:finish", {
@@ -118,194 +172,184 @@ function EmberPageInner() {
     },
   });
 
-  const lastGridSyncRef = useRef("");
-  const lastRunSyncRef = useRef("");
-  const lastIgnitionSyncRef = useRef("");
-  const lastBurnSyncRef = useRef("");
-  const lastBreakSyncRef = useRef("");
+  // Build agent features by scanning all tool outputs from the LAST
+  // configure_simulation call forward. This replaces the old approach
+  // of appending features per-tool-call, which left stale markers when
+  // the agent removed points/lines in a later reconfiguration.
+  const lastSyncRef = useRef("");
+  const lastAppliedRunRef = useRef("");
 
   useEffect(() => {
-    for (const msg of messages) {
+    // Build a fingerprint of all tool outputs to avoid redundant work
+    const fingerprint = messages
+      .filter((m) => m.role === "assistant")
+      .map((m) => `${m.id}:${m.parts.map(getToolPartFingerprint).join("|")}`)
+      .join("|");
+    if (fingerprint === lastSyncRef.current) return;
+    lastSyncRef.current = fingerprint;
+
+    // Find the index of the LAST configure_simulation output.
+    // Everything before it is from a previous session and should be ignored.
+    let lastConfigIdx = -1;
+    type MsgWithIndex = { msgIdx: number; partIdx: number };
+    const allParts: Array<{ msg: FireAgentUIMessage; part: FireAgentUIMessage["parts"][number] } & MsgWithIndex> = [];
+
+    for (let mi = 0; mi < messages.length; mi++) {
+      const msg = messages[mi];
       if (msg.role !== "assistant" || !msg.parts) continue;
+      for (let pi = 0; pi < msg.parts.length; pi++) {
+        allParts.push({ msg, part: msg.parts[pi], msgIdx: mi, partIdx: pi });
+      }
+    }
 
-      for (const part of msg.parts) {
-        if (
-          part.type === "tool-configure_simulation" &&
-          part.state === "output-available"
-        ) {
-          const output = part.output as
-            | {
-                location?: { lat: number; lng: number };
-                wind?: {
-                  speed: number | string;
-                  direction: number | string;
-                };
-                grid?: { resolution: number; dimension: number };
-              }
-            | undefined;
+    // Find last configure_simulation output and sync grid/wind
+    for (let i = allParts.length - 1; i >= 0; i--) {
+      const { part } = allParts[i];
+      if (part.type === "tool-configure_simulation" && part.state === "output-available") {
+        lastConfigIdx = i;
+        break;
+      }
+    }
 
-          if (!output?.location) continue;
-
-          const key = JSON.stringify(output);
-          if (key === lastGridSyncRef.current) continue;
-          lastGridSyncRef.current = key;
-
-          setGridConfig({
-            lat: output.location.lat,
-            lng: output.location.lng,
-            cellResolution: output.grid?.resolution ?? 30,
-            cellDimension: output.grid?.dimension ?? 200,
-          });
-
-          if (output.wind) {
-            if (typeof output.wind.speed === "number") {
-              setWindSpeed(output.wind.speed);
-            }
-
-            if (typeof output.wind.direction === "number") {
-              setWindDirection(output.wind.direction);
-            }
+    // Sync grid from the latest configure_simulation
+    if (lastConfigIdx >= 0) {
+      const configPart = allParts[lastConfigIdx].part;
+      // Type was verified at the search above — safe to access .output
+      const output = (configPart as { output: unknown }).output as
+        | {
+            location?: { lat: number; lng: number };
+            wind?: { speed: number | string; direction: number | string };
+            grid?: { resolution: number; dimension: number };
+            simDuration?: number | null;
           }
+        | undefined;
 
+      if (output?.location) {
+        setGridConfig({
+          lat: output.location.lat,
+          lng: output.location.lng,
+          cellResolution: output.grid?.resolution ?? 30,
+          cellDimension: output.grid?.dimension ?? 200,
+        });
 
+        if (output.wind) {
+          if (typeof output.wind.speed === "number") setWindSpeed(output.wind.speed);
+          if (typeof output.wind.direction === "number") setWindDirection(output.wind.direction);
         }
 
-        if (
-          part.type === "tool-set_point_ignition" &&
-          part.state === "output-available"
-        ) {
-          const output = part.output as
-            | { points: Array<{ x: number; y: number }>; count: number }
-            | undefined;
-
-          if (!output?.points) continue;
-
-          const key = `ignition-${msg.id}-${JSON.stringify(output.points)}`;
-          if (key === lastIgnitionSyncRef.current) continue;
-          lastIgnitionSyncRef.current = key;
-
-          setAgentFeatures((prev) => ({
-            ...prev,
-            ignitions: [...prev.ignitions, ...output.points],
-          }));
-        }
-
-        if (
-          part.type === "tool-set_burn_team" &&
-          part.state === "output-available"
-        ) {
-          const output = part.output as
-            | {
-                teamName: string;
-                segments: Array<{
-                  from: { x: number; y: number };
-                  to: { x: number; y: number };
-                }>;
-              }
-            | undefined;
-
-          if (!output?.segments) continue;
-
-          const key = `burn-${msg.id}-${output.teamName}`;
-          if (key === lastBurnSyncRef.current) continue;
-          lastBurnSyncRef.current = key;
-
-          setAgentFeatures((prev) => ({
-            ...prev,
-            burnTeams: [
-              ...prev.burnTeams,
-              {
-                teamName: output.teamName,
-                segments: output.segments,
-              },
-            ],
-          }));
-        }
-
-        if (
-          part.type === "tool-set_fuel_break" &&
-          part.state === "output-available"
-        ) {
-          const output = part.output as
-            | {
-                segments: Array<{
-                  x1: number;
-                  y1: number;
-                  x2: number;
-                  y2: number;
-                }>;
-              }
-            | undefined;
-
-          if (!output?.segments) continue;
-
-          const key = `break-${msg.id}-${JSON.stringify(output.segments)}`;
-          if (key === lastBreakSyncRef.current) continue;
-          lastBreakSyncRef.current = key;
-
-          setAgentFeatures((prev) => ({
-            ...prev,
-            fuelBreaks: [...prev.fuelBreaks, ...output.segments],
-          }));
-        }
-
-        if (part.type === "tool-run_simulation") {
-          if (
-            part.state === "input-streaming" ||
-            part.state === "input-available"
-          ) {
-            setSimPhase("running");
-            // Clear agent feature preview — the heatmap overlay is now
-            // the source of truth. This also removes any stale markers
-            // from points the agent removed on the backend.
-            clearAgentFeatures();
-            // Sync the duration pill from the agent's chosen time
-            const input = part.input as { time?: number } | undefined;
-            if (input?.time && input.time > 0) {
-              setSimDuration(input.time);
-            }
-          }
-
-          if (part.state === "output-available") {
-            const runKey = `${msg.id}-run`;
-            if (runKey === lastRunSyncRef.current) continue;
-            lastRunSyncRef.current = runKey;
-
-            const output = part.output as
-              | {
-                  cells?: CellOperation[];
-                  status?: string;
-                  cellOperations?: number;
-                  spreadCells?: number;
-                  timeSimulated?: number;
-                  mode?: string;
-                  burnedAreaKm2?: number;
-                  perimeterKm?: number;
-                }
-              | undefined;
-
-            if (output?.status === "no_ignition" || output?.status === "no_spread") {
-              if (output.cells) {
-                setSimulationCells(output.cells);
-              }
-              setSimPhase("idle");
-              continue;
-            }
-
-            if (output?.cells) {
-              setSimulationCells(output.cells);
-            } else {
-              console.error("[ember][client] run_simulation missing cells payload");
-              setSimPhase("idle");
-            }
-          }
+        // Sync duration if the agent set it during configuration
+        if (typeof output.simDuration === "number" && output.simDuration > 0) {
+          setSimDuration(output.simDuration);
         }
       }
+    }
+
+    // Rebuild agent features from tool outputs AFTER the last config.
+    // This ensures removed features don't linger.
+    const startIdx = lastConfigIdx >= 0 ? lastConfigIdx + 1 : 0;
+    const ignitions: Array<{ x: number; y: number }> = [];
+    const burnTeams: Array<{ teamName: string; segments: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }> }> = [];
+    const fuelBreaks: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+    let latestRunPart: Extract<FireAgentUIMessage["parts"][number], { type: "tool-run_simulation" }> | null = null;
+    let latestRunIdx = -1;
+    let latestFeatureIdx = -1;
+
+    for (let i = startIdx; i < allParts.length; i++) {
+      const { part } = allParts[i];
+
+      if (part.type === "tool-set_point_ignition" && part.state === "output-available") {
+        const output = part.output as { points?: Array<{ x: number; y: number }> } | undefined;
+        if (output?.points) ignitions.push(...output.points);
+        latestFeatureIdx = i;
+      }
+
+      if (part.type === "tool-set_burn_team" && part.state === "output-available") {
+        const output = part.output as { teamName?: string; segments?: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }> } | undefined;
+        if (output?.segments && output.teamName) {
+          burnTeams.push({ teamName: output.teamName, segments: output.segments });
+        }
+        latestFeatureIdx = i;
+      }
+
+      if (part.type === "tool-set_fuel_break" && part.state === "output-available") {
+        const output = part.output as { segments?: Array<{ x1: number; y1: number; x2: number; y2: number }> } | undefined;
+        if (output?.segments) fuelBreaks.push(...output.segments);
+        latestFeatureIdx = i;
+      }
+
+      // Once a simulation runs, clear the preview markers
+      if (part.type === "tool-run_simulation") {
+        latestRunPart = part;
+        latestRunIdx = i;
+      }
+    }
+
+    let shouldHideAgentFeatures = false;
+
+    if (latestRunPart && latestRunIdx > latestFeatureIdx) {
+      const runKey = `${latestRunPart.toolCallId}:${latestRunPart.state}`;
+
+      if (
+        latestRunPart.state === "input-streaming" ||
+        latestRunPart.state === "input-available"
+      ) {
+        setSimPhase("running");
+        shouldHideAgentFeatures = true;
+        const toolInput = latestRunPart.input as { time?: number } | undefined;
+        if (toolInput?.time && toolInput.time > 0) {
+          setSimDuration(toolInput.time);
+        }
+      } else if (
+        latestRunPart.state === "output-error" ||
+        latestRunPart.state === "output-denied"
+      ) {
+        setSimPhase("idle");
+      } else if (latestRunPart.state === "output-available") {
+        const output = latestRunPart.output as
+          | {
+              cells?: CellOperation[];
+              status?: string;
+              cellOperations?: number;
+              spreadCells?: number;
+              timeSimulated?: number;
+              mode?: string;
+              burnedAreaKm2?: number;
+              perimeterKm?: number;
+            }
+          | undefined;
+
+        const appliedKey = `${runKey}:${output?.status ?? ""}:${output?.cellOperations ?? ""}:${output?.spreadCells ?? ""}`;
+
+        if (output?.status === "no_ignition" || output?.status === "no_spread") {
+          if (lastAppliedRunRef.current !== appliedKey) {
+            if (output.cells) setSimulationCells(output.cells);
+            lastAppliedRunRef.current = appliedKey;
+          }
+          setSimPhase("idle");
+        } else if (output?.cells) {
+          shouldHideAgentFeatures = true;
+          if (lastAppliedRunRef.current !== appliedKey) {
+            clearDrawings();
+            setSimulationCells(output.cells);
+            lastAppliedRunRef.current = appliedKey;
+          }
+        } else {
+          console.error("[ember][client] run_simulation missing cells payload");
+          setSimPhase("idle");
+        }
+      }
+    }
+
+    // Set the rebuilt features (or clear if the current run should own the view)
+    if (shouldHideAgentFeatures) {
+      clearAgentFeatures();
+    } else {
+      setAgentFeatures({ ignitions, burnTeams, fuelBreaks });
     }
   }, [
     messages,
     clearAgentFeatures,
-    recenterToGrid,
+    clearDrawings,
     setAgentFeatures,
     setGridConfig,
     setSimDuration,
@@ -339,7 +383,9 @@ function EmberPageInner() {
 
   const isEmpty = messages.length === 0;
 
-  const handleNewSimulation = () => {
+  const handleNewSimulation = async () => {
+    stop();
+    await fetch("/api/session/clear", { method: "POST" }).catch(() => {});
     // Reset all map state
     dismissSimulation();
     clearGrid();
@@ -350,14 +396,9 @@ function EmberPageInner() {
     setSimDuration(3600);
     // Clear chat
     setMessages([]);
-    // Clear sync refs
-    lastGridSyncRef.current = "";
-    lastRunSyncRef.current = "";
-    lastIgnitionSyncRef.current = "";
-    lastBurnSyncRef.current = "";
-    lastBreakSyncRef.current = "";
-    // Clear session cookie (HttpOnly, needs server call)
-    fetch("/api/session/clear", { method: "POST" }).catch(() => {});
+    // Clear sync ref
+    lastSyncRef.current = "";
+    lastAppliedRunRef.current = "";
   };
 
   return (
@@ -384,17 +425,23 @@ function EmberPageInner() {
                   <RotateCcw className="size-4" />
                 </button>
               )}
-              <button
+              <Link
+                href="/info"
                 className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 title="Info"
               >
                 <Info className="size-4" />
-              </button>
+              </Link>
               <button
+                onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
                 className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 title="Toggle theme"
               >
-                <Moon className="size-4" />
+                {mounted && resolvedTheme === "dark" ? (
+                  <Sun className="size-4" />
+                ) : (
+                  <Moon className="size-4" />
+                )}
               </button>
             </div>
           </header>
@@ -544,7 +591,7 @@ function EmberPageInner() {
 
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <FireMap styleOverride={mapStyle} />
-          <GridOverlay />
+          <GridOverlay isSatellite={mapStyle === "satellite"} />
           <AgentFeatureOverlay />
           <SimulationOverlay />
           <MapCrosshair />

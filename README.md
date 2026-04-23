@@ -87,10 +87,12 @@ Create a `.env` file:
 ```bash
 GOOGLE_VERTEX_API_KEY=your_vertex_ai_api_key
 NEXT_PUBLIC_MAPTILER_KEY=your_maptiler_api_key
+DEVS_FIRE_BASE_URL=http://firesim.cs.gsu.edu:8084/api
 ```
 
 - **Vertex AI**: [Get an API key](https://console.cloud.google.com/vertex-ai) (Express Mode — just an API key, no project/location needed)
 - **MapTiler**: [Free account](https://cloud.maptiler.com/account/keys/) (100k loads/month, no credit card)
+- **DEVS-FIRE**: Defaults to `http://firesim.cs.gsu.edu:8084/api`. Override `DEVS_FIRE_BASE_URL` if the service is proxied differently in your environment.
 
 ### Install & Run
 
@@ -100,16 +102,6 @@ pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
-
-## Design Philosophy
-
-Built following [Emil Kowalski's](https://emilkowal.ski/) design engineering principles:
-
-- **Boxy/blocky aesthetic** — clean, structured components
-- **Amber accent palette** — fire-themed, harmonious with dark mode
-- **Spring animations** — button press `scale(0.97)`, panel slide-in 250ms ease-out
-- **No animation on keyboard actions** — send message doesn't bounce
-- **Reduced motion respected** — `prefers-reduced-motion` → fade only
 
 ## How the Simulation Pipeline Works
 

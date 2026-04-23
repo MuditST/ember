@@ -1,7 +1,7 @@
 /**
  * DEVS-FIRE API response types.
  *
- * Types derived from live API testing against https://firesim.cs.gsu.edu/api/
+ * Types derived from live API testing against the DEVS-FIRE HTTP API.
  * Note: The API returns x/y as strings in simulation results, not numbers.
  */
 
