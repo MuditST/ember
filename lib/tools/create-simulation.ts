@@ -21,7 +21,9 @@ export function makeCreateSimulation(tokenRef: SessionTokenRef) {
     execute: async () => {
       const token = await api.connectToServer();
       tokenRef.current = token;
-      return { token, status: "session_created" };
+      // Token is NOT sent to the client — only stored in the server-side ref.
+      // This prevents client tampering with session state.
+      return { status: "session_created" };
     },
   });
 }
