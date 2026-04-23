@@ -33,15 +33,15 @@ interface DrawToolbarProps {
 }
 
 export function DrawToolbar({ className }: DrawToolbarProps) {
-  const { ready, activeMode, setMode, features, clearDrawings, gridConfig } = useDraw();
+  const { ready, activeMode, setMode, features, clearDrawings, gridConfig, simPhase } = useDraw();
 
   const hasFeatures =
     features.ignitions.length > 0 ||
     features.burnPaths.length > 0 ||
     features.fuelBreaks.length > 0;
 
-  // Only show toolbar after grid is placed (progressive unlock)
-  if (!ready || !gridConfig) return null;
+  // Only show toolbar after grid is placed AND simulation is idle
+  if (!ready || !gridConfig || simPhase !== "idle") return null;
 
   const isPanMode = activeMode === null;
 

@@ -2,7 +2,7 @@
 
 > An agentic wildfire simulation interface — translate natural language into real-time fire simulations.
 
-Ember is a Claude-style chat agent that sits on top of the [DEVS-FIRE research API](https://firesim.cs.gsu.edu/api/) from Georgia State University's ACME Lab. Instead of manually configuring simulation parameters through forms, you describe scenarios in plain English and the AI agent orchestrates the entire pipeline — location, wind, ignition, fuel breaks, execution, and visualization.
+Ember is a chat agent that sits on top of the [DEVS-FIRE research API](https://firesim.cs.gsu.edu/api/) from Georgia State University's ACME Lab. Instead of manually configuring simulation parameters through forms, you describe scenarios in plain English and the AI agent orchestrates the entire pipeline — location, wind, ignition, fuel breaks, execution, and visualization.
 
 ---
 
@@ -12,8 +12,9 @@ Ember is a Claude-style chat agent that sits on top of the [DEVS-FIRE research A
 - **Interactive map artifact** — real-time fire spread visualization on a dark-themed vector map with heatmap-style cell coloring
 - **Draw-to-configure** — click to place ignition points, draw polylines for burn team paths and fuel breaks directly on the map
 - **Dual input** — combine map drawing with natural language for precise control ("Use this line as a fuel break along the ridge")
-- **Confirmation before execution** — the agent summarizes all parameters and waits for approval before running
+- **Confirm-before-run** — the agent summarizes all parameters and waits for explicit user confirmation before executing
 - **Live results** — burned area, perimeter length, cell counts, and fire spread overlay rendered as the simulation completes
+- **Playback controls** — scrub through the fire spread timeline with play/pause, speed control, and seek
 
 ## Architecture
 
@@ -22,15 +23,15 @@ Ember is a Claude-style chat agent that sits on top of the [DEVS-FIRE research A
 │  🔥 Ember                                                         │
 ├──────────────────────────────┬─────────────────────────────────────┤
 │                              │                                     │
-│   CHAT PANEL                 │   ARTIFACT PANEL                    │
+│   CHAT PANEL                 │   MAP PANEL                         │
 │   (AI Elements + useChat)    │   (MapLibre + MapTiler)             │
 │                              │                                     │
 │   • Streaming messages       │   • Dark/Satellite/Hybrid styles    │
-│   • Tool progress cards      │   • Fire spread heatmap             │
-│   • Confirmation components  │   • Grid overlay                    │
-│   • Suggestion chips         │   • Draw: points, lines, breaks     │
-│                              │   • Stats dashboard                 │
-│   ┌──────────────────────┐   │                                     │
+│   • Tool progress cards      │   • Fire spread heatmap overlay     │
+│   • Suggestion chips         │   • Grid overlay                    │
+│   • Agent feature sync       │   • Draw: points, lines, breaks     │
+│                              │   • Agent feature preview layer     │
+│   ┌──────────────────────┐   │   • Playback bar + timeline         │
 │   │ 🔥 Ask anything...   │   │                                     │
 │   └──────────────────────┘   │                                     │
 └──────────────────────────────┴─────────────────────────────────────┘
@@ -58,7 +59,7 @@ User Message → Gemini 3 Flash (ToolLoopAgent) → Tool Calls → DEVS-FIRE API
 
 ## Agent Tools
 
-The agent has 9 tools that map to DEVS-FIRE API endpoints:
+The agent has 7 tools that map to DEVS-FIRE API endpoints:
 
 | Tool | What It Does |
 |------|-------------|
@@ -67,10 +68,10 @@ The agent has 9 tools that map to DEVS-FIRE API endpoints:
 | `set_point_ignition` | Places ignition points on the grid |
 | `set_burn_team` | Configures dynamic ignition paths (line ignition) |
 | `set_fuel_break` | Suppresses cells to create firebreaks |
-| `run_simulation` | Executes simulation (**requires user confirmation**) |
-| `get_results` | Fetches burned area, perimeter, cell counts |
+| `run_simulation` | Executes simulation + returns results (burned area, perimeter, raw cells) |
 | `get_terrain_data` | Reads fuel, slope, and aspect data |
-| `get_simulation_info` | Gets grid size, cell size, wind conditions |
+
+> **Note:** `run_simulation` returns post-run statistics (burned area, perimeter) and raw cell operations inline. There is no separate `get_results` tool — this prevents premature API calls that would 500 before the run completes.
 
 ## Getting Started
 
@@ -115,17 +116,27 @@ Built following [Emil Kowalski's](https://emilkowal.ski/) design engineering pri
 ```
 1. User: "Simulate a fire near Atlanta, GA"
 2. Ember → create_simulation()        → gets session token
-3. Ember → configure_simulation()     → sets lat/lng, wind
+3. Ember → configure_simulation()     → sets lat/lng, wind, grid
 4. Ember → "Where should the ignition be?"
 5. User clicks map (or types coords)
 6. Ember → set_point_ignition()       → places fire start
-7. Ember → shows confirmation card    → user clicks "Run"
-8. Ember → run_simulation(12000s)     → fire spreads
-9. Ember → get_results()              → burned area, perimeter
-10. Map renders fire heatmap + perimeter outline
-11. Stats cards show results
-12. User: "What if wind was 20 mph?"  → Ember re-runs
+7. Ember → summarizes config          → "Ready to run?"
+8. User: "Yes, run it"
+9. Ember → run_simulation(3600s)      → returns cells + stats
+10. Map renders fire heatmap + playback bar appears
+11. User scrubs timeline to watch fire spread
+12. User: "What if wind was 20 mph?"  → Ember reconfigures & re-runs
 ```
+
+## Key UX Features
+
+- **Auto-recenter**: Map automatically fits to the grid bounds when the agent places a new grid
+- **Draw mode gating**: Drawing tools are disabled during simulation — the user can't accidentally place points during playback
+- **Duration sync**: When the agent changes the simulation duration, the UI pill updates to match
+- **New Simulation**: Reset button in the header clears everything (chat, grid, features, session) for a fresh start
+- **Dismiss & adjust**: Close the playback bar to return to idle state with grid/wind preserved for re-runs
+- **Session reuse**: The agent reuses the existing session across conversation turns via HTTP-only cookies
+- **Agent feature preview**: Ignition points, burn team paths, and fuel breaks placed by the agent appear as colored markers on the map before the simulation runs
 
 ## Project Structure
 
@@ -133,33 +144,42 @@ Built following [Emil Kowalski's](https://emilkowal.ski/) design engineering pri
 app/
 ├── layout.tsx                  # Root layout, metadata
 ├── globals.css                 # Tailwind + fire gradient vars
-├── page.tsx                    # Split layout (chat + map)
-└── api/chat/route.ts           # ToolLoopAgent stream endpoint
+├── page.tsx                    # Split layout (chat + map) + agent sync
+└── api/
+    ├── chat/route.ts           # ToolLoopAgent stream endpoint
+    └── session/clear/route.ts  # Clears session cookie (for reset)
 
 components/
 ├── ai-elements/                # Installed via AI Elements CLI
-├── chat/
-│   ├── chat-panel.tsx          # Messages + input
-│   ├── welcome-screen.tsx      # Initial centered welcome
-│   ├── tool-renderers.tsx      # Per-tool UI components
-│   └── confirmation-card.tsx   # Run simulation approval
 └── map/
-    ├── artifact-panel.tsx      # Right panel container
     ├── fire-map.tsx            # MapLibre + MapTiler
-    ├── fire-overlay.tsx        # Fire spread heatmap
-    ├── grid-overlay.tsx        # Simulation grid bounds
-    ├── drawing-toolbar.tsx     # Point/line/break mode buttons
-    ├── style-switcher.tsx      # Dark/satellite/hybrid toggle
-    └── simulation-stats.tsx    # Result stats cards
+    ├── simulation-overlay.tsx  # Fire spread heatmap (canvas)
+    ├── agent-feature-overlay.tsx # Agent-placed ignitions/paths preview
+    ├── grid-overlay.tsx        # Simulation grid bounds + crosshair
+    ├── draw-toolbar.tsx        # Point/line/break mode buttons
+    ├── grid-info-bar.tsx       # Wind, duration, grid pills + popovers
+    ├── playback-bar.tsx        # Play/pause, scrub, speed, dismiss
+    └── style-switcher.tsx      # Dark/satellite/hybrid toggle
 
 lib/
-├── agents/fire-agent.ts        # ToolLoopAgent definition
-├── tools/                      # 9 tool definitions (Zod schemas)
+├── agents/fire-agent.ts        # ToolLoopAgent definition + type export
+├── tools/                      # 7 tool definitions (Zod schemas)
+│   ├── create-simulation.ts    # Session creation + token ref
+│   ├── configure-simulation.ts # Location, wind, grid setup
+│   ├── set-point-ignition.ts   # Point ignition placement
+│   ├── set-burn-team.ts        # Line ignition (burn team paths)
+│   ├── set-fuel-break.ts       # Fuel break lines
+│   ├── run-simulation.ts       # Run + inline stats + raw cells
+│   ├── get-terrain-data.ts     # Terrain analysis
+│   └── index.ts                # Barrel exports
 ├── devs-fire/
 │   ├── client.ts               # Typed API client
+│   ├── cell-cache.ts           # Server-side cell cache
 │   └── types.ts                # Response types
-├── prompts/system.ts           # System prompt
-└── simulation-context.tsx      # Shared state (React Context)
+├── draw/
+│   ├── draw-context.tsx        # Shared state (React Context) — grid, wind, sim, features
+│   └── grid-math.ts            # Grid bounds + coordinate math
+└── prompts/system.ts           # System prompt
 ```
 
 ## License

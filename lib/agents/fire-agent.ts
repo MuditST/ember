@@ -1,4 +1,4 @@
-import { ToolLoopAgent, InferAgentUIMessage } from "ai";
+import { ToolLoopAgent, InferAgentUIMessage, stepCountIs } from "ai";
 import { vertex } from "@ai-sdk/google-vertex";
 import { SYSTEM_PROMPT } from "../prompts/system";
 import * as tools from "../tools";
@@ -24,9 +24,7 @@ const staticAgent = new ToolLoopAgent({
     set_burn_team: tools.setBurnTeam,
     set_fuel_break: tools.setFuelBreak,
     run_simulation: tools.runSimulation,
-    get_results: tools.getResults,
     get_terrain_data: tools.getTerrainData,
-    get_simulation_info: tools.getSimulationInfo,
   },
 });
 
@@ -37,19 +35,19 @@ export type FireAgentUIMessage = InferAgentUIMessage<typeof staticAgent>;
 // Runtime agent factory — creates a properly wired agent per request.
 // ---------------------------------------------------------------------------
 
-/** All tool names that require an active session. */
+/** All tool names that require an active session (pre-run safe). */
 const SESSION_TOOLS = [
   "configure_simulation",
   "set_point_ignition",
   "set_burn_team",
   "set_fuel_break",
   "run_simulation",
-  "get_results",
   "get_terrain_data",
-  "get_simulation_info",
 ] as const;
 
-const ALL_TOOLS = ["create_simulation", ...SESSION_TOOLS] as const;
+// get_results and get_simulation_info are NOT included above because
+// their DEVS-FIRE endpoints return 500 before the first completed run.
+// Post-run stats are now folded into run_simulation itself.
 
 /**
  * Create a request-scoped fire agent.
@@ -68,10 +66,7 @@ const ALL_TOOLS = ["create_simulation", ...SESSION_TOOLS] as const;
  *
  * 4. `prepareStep` gates tool availability:
  *    - No token → only `create_simulation` is available
- *    - Token exists → all tools are available
- *
- * This handles both same-turn flows (create → configure → ignite → run)
- * and cross-turn flows (token from a previous conversation turn).
+ *    - Token exists → session tools only (create_simulation hidden)
  */
 export function createFireAgent(tokenRef: SessionTokenRef, spatialContext?: string) {
   const getToken = () => {
@@ -90,27 +85,28 @@ export function createFireAgent(tokenRef: SessionTokenRef, spatialContext?: stri
   return new ToolLoopAgent({
     model: vertex("gemini-3-flash-preview"),
     instructions,
+    stopWhen: stepCountIs(8),
     tools: {
       create_simulation: tools.makeCreateSimulation(tokenRef),
       configure_simulation: tools.makeConfigureSimulation(getToken),
       set_point_ignition: tools.makeSetPointIgnition(getToken),
       set_burn_team: tools.makeSetBurnTeam(getToken),
       set_fuel_break: tools.makeSetFuelBreak(getToken),
-      run_simulation: tools.makeRunSimulation(getToken),
-      get_results: tools.makeGetResults(getToken),
+      run_simulation: tools.makeRunSimulation(getToken, {
+        requiresApproval: false,
+      }),
       get_terrain_data: tools.makeGetTerrainData(getToken),
-      get_simulation_info: tools.makeGetSimulationInfo(getToken),
     },
     prepareStep: async () => {
       // Gate tool availability based on session state.
-      // Before a token exists, only create_simulation is offered to the model.
-      // This prevents the model from attempting API calls without a session.
       if (!tokenRef.current) {
+        // No session → only create_simulation is available.
         return { activeTools: ["create_simulation"] };
       }
 
-      // Token exists — all tools available, no restrictions.
-      return {};
+      // Session exists → hide create_simulation so the model can't
+      // accidentally reset the session. Only pre-run-safe tools available.
+      return { activeTools: [...SESSION_TOOLS] };
     },
   });
 }

@@ -6,9 +6,7 @@ export { setPointIgnition } from "./set-point-ignition";
 export { setBurnTeam } from "./set-burn-team";
 export { setFuelBreak } from "./set-fuel-break";
 export { runSimulation } from "./run-simulation";
-export { getResults } from "./get-results";
 export { getTerrainData } from "./get-terrain-data";
-export { getSimulationInfo } from "./get-simulation-info";
 
 // Factory functions — used at runtime to create token-bound tool instances.
 export { makeCreateSimulation } from "./create-simulation";
@@ -17,9 +15,11 @@ export { makeSetPointIgnition } from "./set-point-ignition";
 export { makeSetBurnTeam } from "./set-burn-team";
 export { makeSetFuelBreak } from "./set-fuel-break";
 export { makeRunSimulation } from "./run-simulation";
-export { makeGetResults } from "./get-results";
 export { makeGetTerrainData } from "./get-terrain-data";
-export { makeGetSimulationInfo } from "./get-simulation-info";
+
+// get_results and get_simulation_info are intentionally NOT exported here.
+// Their DEVS-FIRE endpoints 500 before the first completed run.
+// Post-run stats are now folded into run_simulation.
 
 // Token ref type
 export type { SessionTokenRef } from "./create-simulation";

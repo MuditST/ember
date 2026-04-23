@@ -19,6 +19,8 @@ import {
 } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
 import type { Map as MapLibreMap } from "maplibre-gl";
+import { latlngToCell } from "./grid-math";
+import type { CellOperation } from "../devs-fire/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +55,19 @@ export interface GridConfig {
   cellResolution: number;
   /** Cells per side (50–200) */
   cellDimension: number;
+}
+
+/** Simulation lifecycle phases. */
+export type SimulationPhase = "idle" | "running" | "ready";
+
+/** Features placed by the agent (not drawn by the user). */
+export interface AgentFeatures {
+  ignitions: Array<{ x: number; y: number }>;
+  burnTeams: Array<{
+    teamName: string;
+    segments: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
+  }>;
+  fuelBreaks: Array<{ x1: number; y1: number; x2: number; y2: number }>;
 }
 
 /** Compute the grid side length in meters. */
@@ -100,6 +115,35 @@ export interface DrawContextValue {
   recenterToGrid: () => void;
   /** Access to the map instance (for center tracking, etc.) */
   getMap: () => MapLibreMap | null;
+
+  // ── Simulation parameters ──
+  windSpeed: number;
+  windDirection: number;
+  simDuration: number;
+  setWindSpeed: (v: number) => void;
+  setWindDirection: (v: number) => void;
+  setSimDuration: (v: number) => void;
+
+  // ── Simulation lifecycle ──
+  simPhase: SimulationPhase;
+  setSimPhase: (phase: SimulationPhase) => void;
+  simulationCells: CellOperation[] | null;
+  setSimulationCells: (cells: CellOperation[] | null) => void;
+  /** Dismiss simulation results and return to idle/drawing mode */
+  dismissSimulation: () => void;
+
+  // ── Playback ──
+  playbackTime: number;
+  setPlaybackTime: (t: number) => void;
+  isPlaying: boolean;
+  setIsPlaying: (playing: boolean) => void;
+  playbackSpeed: number;
+  setPlaybackSpeed: (speed: number) => void;
+
+  // ── Agent-authored features (not Terra Draw) ──
+  agentFeatures: AgentFeatures;
+  setAgentFeatures: (features: AgentFeatures | ((prev: AgentFeatures) => AgentFeatures)) => void;
+  clearAgentFeatures: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +190,25 @@ export function DrawProvider({ children }: { children: ReactNode }) {
     fuelBreaks: [],
   });
   const [gridConfig, setGridConfigState] = useState<GridConfig | null>(null);
+
+  // ── Simulation parameters ──
+  const [windSpeed, setWindSpeed] = useState(3);
+  const [windDirection, setWindDirection] = useState(0);
+  const [simDuration, setSimDuration] = useState(3600); // 1 hour default
+
+  // ── Simulation lifecycle ──
+  const [simPhase, setSimPhase] = useState<SimulationPhase>("idle");
+  const [simulationCells, setSimulationCellsState] = useState<CellOperation[] | null>(null);
+
+  // ── Playback ──
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+
+  // ── Agent-authored features ──
+  const EMPTY_AGENT_FEATURES: AgentFeatures = { ignitions: [], burnTeams: [], fuelBreaks: [] };
+  const [agentFeatures, setAgentFeatures] = useState<AgentFeatures>(EMPTY_AGENT_FEATURES);
+  const clearAgentFeatures = useCallback(() => setAgentFeatures(EMPTY_AGENT_FEATURES), []);
 
   // ── Sync features from Terra Draw store → React state ──
   const syncFeatures = useCallback(() => {
@@ -379,6 +442,69 @@ export function DrawProvider({ children }: { children: ReactNode }) {
 
   const getMap = useCallback(() => mapRef.current, []);
 
+  // ── Simulation lifecycle helpers ──
+  const setSimulationCells = useCallback((cells: CellOperation[] | null) => {
+    setSimulationCellsState(cells);
+    if (cells) {
+      setSimPhase("ready");
+      setPlaybackTime(0);
+      setIsPlaying(false);
+    }
+  }, []);
+
+  const lockMap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.dragPan.disable();
+    map.scrollZoom.disable();
+    map.doubleClickZoom.disable();
+    map.dragRotate.disable();
+    map.keyboard.disable();
+    map.touchZoomRotate.disable();
+  }, []);
+
+  const unlockMap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.dragPan.enable();
+    map.scrollZoom.enable();
+    map.doubleClickZoom.enable();
+    map.dragRotate.enable();
+    map.keyboard.enable();
+    map.touchZoomRotate.enable();
+  }, []);
+
+  const dismissSimulation = useCallback(() => {
+    setSimulationCellsState(null);
+    setSimPhase("idle");
+    setPlaybackTime(0);
+    setIsPlaying(false);
+    clearAgentFeatures();
+    unlockMap();
+  }, [unlockMap, clearAgentFeatures]);
+
+  // Lock/unlock map when simulation phase changes
+  useEffect(() => {
+    if (simPhase === "running" || simPhase === "ready") {
+      // Deactivate any active draw mode — user shouldn't be able to place
+      // points or draw lines during simulation or playback
+      const draw = drawRef.current;
+      if (draw) {
+        try { draw.setMode(TD_MODE.static); } catch { /* mode might not exist yet */ }
+      }
+      setActiveMode(null);
+
+      lockMap();
+      // Recenter on the grid for a stable overlay
+      if (gridConfig) {
+        const bounds = getGridBounds(gridConfig);
+        mapRef.current?.fitBounds(bounds, { padding: 60, duration: 500 });
+      }
+    } else {
+      unlockMap();
+    }
+  }, [simPhase, lockMap, unlockMap, gridConfig]);
+
   // ── Build spatial context string for agent injection ──
   const getSpatialContext = useCallback((): string => {
     const parts: string[] = [];
@@ -393,32 +519,58 @@ export function DrawProvider({ children }: { children: ReactNode }) {
       );
     }
 
-    // Drawn features
+    // Wind conditions
+    parts.push(`Wind: ${windSpeed} m/s from ${windDirection}°`);
+    parts.push(`Simulation duration: ${Math.round(simDuration / 60)} minutes`);
+
+    // Drawn features with translated cell coordinates
     const { ignitions, burnPaths, fuelBreaks } = features;
 
     if (ignitions.length) {
-      const pts = ignitions
-        .map((p) => `(${p.lat.toFixed(4)}°N, ${p.lng.toFixed(4)}°W)`)
-        .join(", ");
+      const pts = ignitions.map((p) => {
+        const base = `(${p.lat.toFixed(4)}°N, ${p.lng.toFixed(4)}°W)`;
+        if (gridConfig) {
+          const cell = latlngToCell(gridConfig, p.lat, p.lng);
+          return `${base} → cell(${cell.x}, ${cell.y})`;
+        }
+        return base;
+      }).join(", ");
       parts.push(`Ignition points (${ignitions.length}): ${pts}`);
     }
 
     if (burnPaths.length) {
       for (const path of burnPaths) {
-        const pts = path.coords
-          .map(([lng, lat]) => `(${lat.toFixed(4)}, ${lng.toFixed(4)})`)
-          .join(" → ");
+        const pts = path.coords.map(([lng, lat]) => {
+          const base = `(${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+          if (gridConfig) {
+            const cell = latlngToCell(gridConfig, lat, lng);
+            return `${base}→cell(${cell.x},${cell.y})`;
+          }
+          return base;
+        }).join(" → ");
         parts.push(`Burn team path: ${pts}`);
       }
     }
 
     if (fuelBreaks.length) {
       for (const brk of fuelBreaks) {
-        const pts = brk.coords
-          .map(([lng, lat]) => `(${lat.toFixed(4)}, ${lng.toFixed(4)})`)
-          .join(" → ");
+        const pts = brk.coords.map(([lng, lat]) => {
+          const base = `(${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+          if (gridConfig) {
+            const cell = latlngToCell(gridConfig, lat, lng);
+            return `${base}→cell(${cell.x},${cell.y})`;
+          }
+          return base;
+        }).join(" → ");
         parts.push(`Fuel break: ${pts}`);
       }
+    }
+
+    // Simulation status
+    if (simPhase === "running") {
+      parts.push("Simulation: Running...");
+    } else if (simPhase === "ready" && simulationCells) {
+      parts.push(`Simulation: Complete — ${simulationCells.length} cell operations`);
     }
 
     if (parts.length === 0) {
@@ -426,7 +578,7 @@ export function DrawProvider({ children }: { children: ReactNode }) {
     }
 
     return `Map state:\n${parts.join("\n")}`;
-  }, [features, gridConfig]);
+  }, [features, gridConfig, windSpeed, windDirection, simDuration, simPhase, simulationCells]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -545,6 +697,30 @@ export function DrawProvider({ children }: { children: ReactNode }) {
         clearGrid,
         recenterToGrid,
         getMap,
+        // Simulation parameters
+        windSpeed,
+        windDirection,
+        simDuration,
+        setWindSpeed,
+        setWindDirection,
+        setSimDuration,
+        // Simulation lifecycle
+        simPhase,
+        setSimPhase,
+        simulationCells,
+        setSimulationCells,
+        dismissSimulation,
+        // Playback
+        playbackTime,
+        setPlaybackTime,
+        isPlaying,
+        setIsPlaying,
+        playbackSpeed,
+        setPlaybackSpeed,
+        // Agent features
+        agentFeatures,
+        setAgentFeatures,
+        clearAgentFeatures,
       }}
     >
       {children}
