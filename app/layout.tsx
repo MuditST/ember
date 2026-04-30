@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Ember — Agentic Wildfire Simulation",
     description:
-      "Simulate a wildfire in natural language and watch it burn in real-time.",
+      "Simulate a wildfire in natural language and watch it burn in real-time",
     siteName: "Ember",
     type: "website",
     locale: "en_US",

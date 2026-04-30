@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { MapPin, LocateFixed, X, ChevronDown, Wind, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useDraw, type GridConfig } from "@/lib/draw/draw-context";
+import { useDraw } from "@/lib/draw/draw-context";
 import {
   Popover,
   PopoverContent,

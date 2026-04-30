@@ -138,7 +138,7 @@ export default function InfoPage() {
           An agentic wildfire simulation interface — translate natural language
           into real-time fire simulations powered by{" "}
           <a
-            href="https://firesim.cs.gsu.edu/api/"
+            href="https://sims.cs.gsu.edu/sims/research/DEVSFIRE_API.html"
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary underline underline-offset-4 decoration-primary/30 hover:decoration-primary/60 transition-colors"

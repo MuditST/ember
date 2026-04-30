@@ -14,7 +14,7 @@ import type { SessionTokenRef } from "../tools";
  * to produce a fully typed UIMessage. Since all factory-built tools share
  * identical schemas with these static instances, the inferred types match.
  */
-const staticAgent = new ToolLoopAgent({
+export const fireAgentForTypeInference = new ToolLoopAgent({
   model: vertex("gemini-3-flash-preview"),
   instructions: SYSTEM_PROMPT,
   tools: {
@@ -29,7 +29,9 @@ const staticAgent = new ToolLoopAgent({
 });
 
 /** Inferred UIMessage type for type-safe rendering in chat components. */
-export type FireAgentUIMessage = InferAgentUIMessage<typeof staticAgent>;
+export type FireAgentUIMessage = InferAgentUIMessage<
+  typeof fireAgentForTypeInference
+>;
 
 // ---------------------------------------------------------------------------
 // Runtime agent factory — creates a properly wired agent per request.

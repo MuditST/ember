@@ -7,6 +7,14 @@ interface RunSimulationOptions {
   requiresApproval?: boolean;
 }
 
+const isDevelopment = process.env.NODE_ENV === "development";
+
+function debugLog(...args: Parameters<typeof console.debug>) {
+  if (isDevelopment) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Factory: returns a run_simulation tool bound to the given token.
  * Uses needsApproval: true — client shows approval UI before execution.
@@ -36,7 +44,7 @@ export function makeRunSimulation(
     needsApproval: requiresApproval,
     execute: async ({ time, mode }) => {
       const token = getToken();
-      console.log("[ember][run_simulation] start", {
+      debugLog("[ember][run_simulation] start", {
         tokenPreview: token.slice(0, 8),
         time,
         mode: mode ?? "run",
@@ -62,7 +70,7 @@ export function makeRunSimulation(
         throw error;
       }
 
-      console.log("[ember][run_simulation] returned cells", {
+      debugLog("[ember][run_simulation] returned cells", {
         tokenPreview: token.slice(0, 8),
         count: cells.length,
       });

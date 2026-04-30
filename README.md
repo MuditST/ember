@@ -1,88 +1,126 @@
-# 🔥 Ember
+# Ember
 
-> An agentic wildfire simulation interface — translate natural language into real-time fire simulations.
+Ember is an agentic wildfire simulation interface for configuring, running, visualizing, and analyzing DEVS-FIRE wildfire simulations. Users can describe scenarios in natural language while still retaining direct manual control over the map, grid, wind, ignition points, burn-team paths, and fuel breaks.
 
-Ember is a chat agent that sits on top of the [DEVS-FIRE research API](https://firesim.cs.gsu.edu/api/) from Georgia State University's ACME Lab. Instead of manually configuring simulation parameters through forms, you describe scenarios in plain English and the AI agent orchestrates the entire pipeline — location, wind, ignition, fuel breaks, execution, and visualization.
+Live demo: https://ember.tushir.com/
 
----
+DEVS-FIRE API reference: https://sims.cs.gsu.edu/sims/research/DEVSFIRE_API.html
 
-## What It Does
+## Overview
 
-- **Chat-driven simulation setup** — describe a fire scenario naturally ("Simulate a wildfire near Wichita, KS, wind blowing from the south at 10 mph") and the agent configures all parameters
-- **Interactive map artifact** — real-time fire spread visualization on a dark-themed vector map with heatmap-style cell coloring
-- **Draw-to-configure** — click to place ignition points, draw polylines for burn team paths and fuel breaks directly on the map
-- **Dual input** — combine map drawing with natural language for precise control ("Use this line as a fuel break along the ridge")
-- **Confirm-before-run** — the agent summarizes all parameters and waits for explicit user confirmation before executing
-- **Live results** — burned area, perimeter length, cell counts, and fire spread overlay rendered as the simulation completes
-- **Playback controls** — scrub through the fire spread timeline with play/pause, speed control, and seek
+Ember turns the DEVS-FIRE simulation API into a conversational web application. Instead of forcing the user to manually translate a fire scenario into API parameters, Ember lets the user describe the scenario in plain English, draw or edit simulation features on a map, run the simulation, visualize the fire spread, and then explain the results in the same chat.
+
+The interface combines an AI-driven workflow with full manual controls: users can place grids, set wind and duration, click ignition points, draw burn-team paths, draw fuel breaks, and replay the simulation timeline.
+
+## Core Features
+
+- Natural-language simulation setup through an AI agent
+- Interactive MapLibre map with light and dark themes
+- Manual grid placement, wind configuration, and duration controls
+- Point ignitions, line ignitions, and fuel breaks drawn directly on the map
+- Agent-readable map state, so user-drawn features can be used in tool calls
+- DEVS-FIRE session continuity through an HTTP-only cookie
+- Simulation execution through server-side tool calls
+- Fire-spread heatmap overlay with playback controls
+- Post-run summaries with burned area, perimeter, duration, wind, and qualitative analysis
+- Follow-up conversation for scenario changes and result interpretation
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  🔥 Ember                                                         │
-├──────────────────────────────┬─────────────────────────────────────┤
-│                              │                                     │
-│   CHAT PANEL                 │   MAP PANEL                         │
-│   (AI Elements + useChat)    │   (MapLibre + MapTiler)             │
-│                              │                                     │
-│   • Streaming messages       │   • Dark/Satellite/Hybrid styles    │
-│   • Tool progress cards      │   • Fire spread heatmap overlay     │
-│   • Suggestion chips         │   • Grid overlay                    │
-│   • Agent feature sync       │   • Draw: points, lines, breaks     │
-│                              │   • Agent feature preview layer     │
-│   ┌──────────────────────┐   │   • Playback bar + timeline         │
-│   │ 🔥 Ask anything...   │   │                                     │
-│   └──────────────────────┘   │                                     │
-└──────────────────────────────┴─────────────────────────────────────┘
+```text
+User
+  |
+  | chat text + map drawings
+  v
+Next.js UI
+  |                         |
+  | spatial context          | fire cells / grid / playback state
+  v                         v
+AI SDK ToolLoopAgent ---> DEVS-FIRE tools ---> DEVS-FIRE REST API
+  |
+  | streamed tool progress + final response
+  v
+Chat panel + map visualization
 ```
 
-The agent receives user messages, reasons about what tools to call, executes them against the DEVS-FIRE API server-side, and streams results back — all in a single conversation turn.
+The important design choice is that the agent and map share state. The map context converts drawn geometry into grid coordinates and injects that state into the agent prompt on each turn. The agent can then call the same DEVS-FIRE operations a manual user would call, but with reasoning and explanation layered on top.
 
-```
-User Message → Gemini 3 Flash (ToolLoopAgent) → Tool Calls → DEVS-FIRE API → Streamed Results → Map + Chat
-```
+## Simulation Flow
+
+1. The user asks for a scenario, such as "Simulate a grass fire near Wichita with strong south winds."
+2. The agent creates or reuses a DEVS-FIRE session.
+3. The agent configures the simulation location, wind, cell resolution, grid size, and duration.
+4. Ignition points, burn-team paths, or fuel breaks are added from either user drawings or natural-language instructions.
+5. The agent summarizes the configuration and waits for run confirmation unless the user explicitly asked to run immediately.
+6. The agent runs the DEVS-FIRE simulation server-side.
+7. The UI renders the returned cell operations as a fire-spread overlay.
+8. The user can replay the spread, ask analysis questions, or request changed conditions for another run.
+
+## Agent Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `create_simulation` | Opens a DEVS-FIRE session and stores the token server-side. |
+| `configure_simulation` | Sets center location, wind speed/direction, cell resolution, grid dimension, and duration. |
+| `set_point_ignition` | Places one or more ignition points by grid cell coordinate. |
+| `set_burn_team` | Creates dynamic line ignition paths from segment coordinates. |
+| `set_fuel_break` | Suppresses cells along a line to model a fuel break. |
+| `run_simulation` | Runs or continues the simulation and returns cell operations plus burned-area/perimeter stats. |
+| `get_terrain_data` | Reads fuel, slope, and aspect data for analysis. |
+
+`run_simulation` returns the post-run statistics directly because several DEVS-FIRE result endpoints fail before a completed run. This keeps the agent from calling result tools too early.
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| **Framework** | [Next.js 16](https://nextjs.org/) (App Router, Turbopack) |
-| **Styling** | [Tailwind CSS 4](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) (Amber theme, Geist font) |
-| **Chat UI** | [AI Elements](https://elements.ai-sdk.dev/) (Conversation, Message, PromptInput, Tool, Suggestion) |
-| **AI** | [Vercel AI SDK v6](https://ai-sdk.dev/) + [Google Vertex AI](https://cloud.google.com/vertex-ai) (Gemini 3 Flash) |
-| **Agent** | `ToolLoopAgent` with `InferAgentUIMessage` for end-to-end type safety |
-| **Map Renderer** | [react-map-gl](https://visgl.github.io/react-map-gl/) + [MapLibre GL JS](https://maplibre.org/) |
-| **Map Tiles** | [MapTiler](https://www.maptiler.com/) (dark, satellite, hybrid styles) |
-| **Map Drawing** | [Terra Draw](https://terradraw.io/) (points, polylines for burn teams + fuel breaks) |
-| **Simulation API** | [DEVS-FIRE REST API](https://firesim.cs.gsu.edu/api/) (GSU ACME Lab) |
+| --- | --- |
+| Framework | Next.js 16 App Router, React 19, TypeScript |
+| Styling | Tailwind CSS 4, shadcn/ui-style components |
+| AI runtime | Vercel AI SDK v6, `ToolLoopAgent` |
+| Model provider | Google Vertex AI / Gemini |
+| Map | react-map-gl, MapLibre GL JS, MapTiler styles |
+| Drawing | Terra Draw |
+| Simulation backend | Georgia State University DEVS-FIRE REST API |
 
-## Agent Tools
+## Project Structure
 
-The agent has 7 tools that map to DEVS-FIRE API endpoints:
+```text
+app/
+  page.tsx                         Main chat + map interface
+  info/page.tsx                    Public project information page
+  api/chat/route.ts                Streaming agent endpoint
+  api/session/clear/route.ts       Clears the DEVS-FIRE session cookie
+  api/simulation/cells/route.ts    Returns cached simulation cells for the UI
 
-| Tool | What It Does |
-|------|-------------|
-| `create_simulation` | Connects to server, gets session token |
-| `configure_simulation` | Sets location, wind, grid resolution |
-| `set_point_ignition` | Places ignition points on the grid |
-| `set_burn_team` | Configures dynamic ignition paths (line ignition) |
-| `set_fuel_break` | Suppresses cells to create firebreaks |
-| `run_simulation` | Executes simulation + returns results (burned area, perimeter, raw cells) |
-| `get_terrain_data` | Reads fuel, slope, and aspect data |
+components/
+  ai-elements/                     Chat, prompt, message, and tool UI components
+  map/                             Map, overlays, grid controls, drawing tools, playback
+  ui/                              Shared interface primitives
 
-> **Note:** `run_simulation` returns post-run statistics (burned area, perimeter) and raw cell operations inline. There is no separate `get_results` tool — this prevents premature API calls that would 500 before the run completes.
+lib/
+  agents/fire-agent.ts             ToolLoopAgent setup and request-scoped agent factory
+  devs-fire/client.ts              Typed DEVS-FIRE HTTP client
+  devs-fire/cell-cache.ts          Server-side cache for simulation cell operations
+  devs-fire/types.ts               DEVS-FIRE response types
+  draw/draw-context.tsx            Shared map, grid, drawing, and simulation state
+  draw/grid-math.ts                Coordinate and grid conversion helpers
+  prompts/system.ts                Agent system instructions
+  tools/                           AI tool definitions mapped to DEVS-FIRE operations
 
-## Getting Started
+scripts/
+  test-api-client.ts               Manual API smoke-test helper
+```
 
-### Prerequisites
+## Environment Setup
 
-- Node.js 18+
+Requirements:
+
+- Node.js 18 or newer
 - pnpm
+- Google Vertex AI API key
+- MapTiler API key
 
-### Environment Variables
-
-Create a `.env` file:
+Create `.env` in the project root:
 
 ```bash
 GOOGLE_VERTEX_API_KEY=your_vertex_ai_api_key
@@ -90,92 +128,40 @@ NEXT_PUBLIC_MAPTILER_KEY=your_maptiler_api_key
 DEVS_FIRE_BASE_URL=http://firesim.cs.gsu.edu:8084/api
 ```
 
-- **Vertex AI**: [Get an API key](https://console.cloud.google.com/vertex-ai) (Express Mode — just an API key, no project/location needed)
-- **MapTiler**: [Free account](https://cloud.maptiler.com/account/keys/) (100k loads/month, no credit card)
-- **DEVS-FIRE**: Defaults to `http://firesim.cs.gsu.edu:8084/api`. Override `DEVS_FIRE_BASE_URL` if the service is proxied differently in your environment.
+`DEVS_FIRE_BASE_URL` defaults to the DEVS-FIRE API server used by the app. Override it only if the API is hosted or proxied somewhere else.
 
-### Install & Run
+Install and run:
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open http://localhost:3000.
 
-## How the Simulation Pipeline Works
+## Verification
 
-```
-1. User: "Simulate a fire near Atlanta, GA"
-2. Ember → create_simulation()        → gets session token
-3. Ember → configure_simulation()     → sets lat/lng, wind, grid
-4. Ember → "Where should the ignition be?"
-5. User clicks map (or types coords)
-6. Ember → set_point_ignition()       → places fire start
-7. Ember → summarizes config          → "Ready to run?"
-8. User: "Yes, run it"
-9. Ember → run_simulation(3600s)      → returns cells + stats
-10. Map renders fire heatmap + playback bar appears
-11. User scrubs timeline to watch fire spread
-12. User: "What if wind was 20 mph?"  → Ember reconfigures & re-runs
+Useful checks before shipping changes:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm build
 ```
 
-## Key UX Features
+The app depends on external services for a complete demo: Vertex AI for the agent, MapTiler for map tiles, and the DEVS-FIRE API for simulation execution.
 
-- **Auto-recenter**: Map automatically fits to the grid bounds when the agent places a new grid
-- **Draw mode gating**: Drawing tools are disabled during simulation — the user can't accidentally place points during playback
-- **Duration sync**: When the agent changes the simulation duration, the UI pill updates to match
-- **New Simulation**: Reset button in the header clears everything (chat, grid, features, session) for a fresh start
-- **Dismiss & adjust**: Close the playback bar to return to idle state with grid/wind preserved for re-runs
-- **Session reuse**: The agent reuses the existing session across conversation turns via HTTP-only cookies
-- **Agent feature preview**: Ignition points, burn team paths, and fuel breaks placed by the agent appear as colored markers on the map before the simulation runs
+## Demo Scenarios
 
-## Project Structure
+Good demonstration prompts:
 
-```
-app/
-├── layout.tsx                  # Root layout, metadata
-├── globals.css                 # Tailwind + fire gradient vars
-├── page.tsx                    # Split layout (chat + map) + agent sync
-└── api/
-    ├── chat/route.ts           # ToolLoopAgent stream endpoint
-    └── session/clear/route.ts  # Clears session cookie (for reset)
+- `Wildfire in Angeles National Forest during Santa Ana winds`
+- `Simulate a grass fire near Wichita, Kansas with strong south winds`
+- `Fire at 34.3N 118.1W, ignition at all 4 corners, 2 hours`
+- Draw a fuel break on the map, then ask Ember to use the drawn line as a fuel break before running.
 
-components/
-├── ai-elements/                # Installed via AI Elements CLI
-└── map/
-    ├── fire-map.tsx            # MapLibre + MapTiler
-    ├── simulation-overlay.tsx  # Fire spread heatmap (canvas)
-    ├── agent-feature-overlay.tsx # Agent-placed ignitions/paths preview
-    ├── grid-overlay.tsx        # Simulation grid bounds + crosshair
-    ├── draw-toolbar.tsx        # Point/line/break mode buttons
-    ├── grid-info-bar.tsx       # Wind, duration, grid pills + popovers
-    ├── playback-bar.tsx        # Play/pause, scrub, speed, dismiss
-    └── style-switcher.tsx      # Dark/satellite/hybrid toggle
+These scenarios show both sides of the project: the agentic natural-language workflow and the manual FireMapSim-style controls.
 
-lib/
-├── agents/fire-agent.ts        # ToolLoopAgent definition + type export
-├── tools/                      # 7 tool definitions (Zod schemas)
-│   ├── create-simulation.ts    # Session creation + token ref
-│   ├── configure-simulation.ts # Location, wind, grid setup
-│   ├── set-point-ignition.ts   # Point ignition placement
-│   ├── set-burn-team.ts        # Line ignition (burn team paths)
-│   ├── set-fuel-break.ts       # Fuel break lines
-│   ├── run-simulation.ts       # Run + inline stats + raw cells
-│   ├── get-terrain-data.ts     # Terrain analysis
-│   └── index.ts                # Barrel exports
-├── devs-fire/
-│   ├── client.ts               # Typed API client
-│   ├── cell-cache.ts           # Server-side cell cache
-│   └── types.ts                # Response types
-├── draw/
-│   ├── draw-context.tsx        # Shared state (React Context) — grid, wind, sim, features
-│   └── grid-math.ts            # Grid bounds + coordinate math
-└── prompts/system.ts           # System prompt
-```
+## Notes
 
-## License
-
-MIT — see [LICENSE](./LICENSE).
-
-> **Note:** The [DEVS-FIRE simulation API](https://firesim.cs.gsu.edu/api/) is a research service provided by Georgia State University's ACME Lab. Ember is an independent open-source frontend; the API and its underlying models are the property of GSU.
+Ember is built on top of the Georgia State University DEVS-FIRE research API. The DEVS-FIRE API and fire-spread model are external research services; this repository contains the web UI, AI agent orchestration, map interaction layer, and API client integration.

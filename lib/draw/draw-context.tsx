@@ -174,6 +174,11 @@ const WHITE = "#FFFFFF";
 // ---------------------------------------------------------------------------
 
 const DrawContext = createContext<DrawContextValue | null>(null);
+const EMPTY_AGENT_FEATURES: AgentFeatures = {
+  ignitions: [],
+  burnTeams: [],
+  fuelBreaks: [],
+};
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -206,7 +211,6 @@ export function DrawProvider({ children }: { children: ReactNode }) {
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
 
   // ── Agent-authored features ──
-  const EMPTY_AGENT_FEATURES: AgentFeatures = { ignitions: [], burnTeams: [], fuelBreaks: [] };
   const [agentFeatures, setAgentFeatures] = useState<AgentFeatures>(EMPTY_AGENT_FEATURES);
   const clearAgentFeatures = useCallback(() => setAgentFeatures(EMPTY_AGENT_FEATURES), []);
 

@@ -157,16 +157,6 @@ function EmberPageInner() {
 
   const { messages, sendMessage, setMessages, status, stop } = useChat<FireAgentUIMessage>({
     transport,
-    onFinish: ({ finishReason, isAbort, isDisconnect, isError, message }) => {
-      console.log("[ember][client] chat:finish", {
-        finishReason,
-        isAbort,
-        isDisconnect,
-        isError,
-        messageId: message.id,
-        partTypes: message.parts.map((part) => part.type),
-      });
-    },
     onError: (error) => {
       console.error("[ember][client] chat:error", error);
     },

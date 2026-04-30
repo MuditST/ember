@@ -10,6 +10,14 @@ export const maxDuration = 120;
 /** Cookie name for the DEVS-FIRE session token */
 const SESSION_COOKIE = "ember_session";
 
+const isDevelopment = process.env.NODE_ENV === "development";
+
+function debugLog(...args: Parameters<typeof console.debug>) {
+  if (isDevelopment) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Validate a DEVS-FIRE session token by making a lightweight API call.
  * Returns true if the session is still active, false if expired/invalid.
@@ -52,7 +60,7 @@ export async function POST(request: Request) {
     spatialContext?: string;
   };
 
-  console.log("[ember][chat] request:start", {
+  debugLog("[ember][chat] request:start", {
     requestId,
     messageCount: messages.length,
     spatialContextPreview: spatialContext?.slice(0, 160),
@@ -70,7 +78,7 @@ export async function POST(request: Request) {
   if (existingToken) {
     const valid = await isTokenValid(existingToken);
     if (!valid) {
-      console.log("[ember][chat] request:stale-token", {
+      debugLog("[ember][chat] request:stale-token", {
         requestId,
         tokenPreview: existingToken.slice(0, 8),
       });
@@ -92,7 +100,7 @@ export async function POST(request: Request) {
     uiMessages: messages,
     abortSignal: request.signal,
     onStepFinish: async ({ stepNumber, finishReason, toolCalls, toolResults, usage }) => {
-      console.log("[ember][chat] step:finish", {
+      debugLog("[ember][chat] step:finish", {
         requestId,
         stepNumber,
         finishReason,
@@ -111,7 +119,7 @@ export async function POST(request: Request) {
       });
     },
     onFinish: async ({ finishReason, isAborted, isContinuation, responseMessage }) => {
-      console.log("[ember][chat] request:finish", {
+      debugLog("[ember][chat] request:finish", {
         requestId,
         finishReason,
         isAborted,
@@ -145,7 +153,7 @@ export async function POST(request: Request) {
       "Set-Cookie",
       `${SESSION_COOKIE}=${tokenRef.current}; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600`
     );
-    console.log("[ember][chat] request:set-cookie", {
+    debugLog("[ember][chat] request:set-cookie", {
       requestId,
       tokenPreview: tokenRef.current.slice(0, 8),
     });
